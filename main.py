@@ -1,6 +1,6 @@
 # main.py
 # Este es el servidor web que recibirá las preguntas y devolverá las respuestas.
-# Utiliza FastAPI para crear la API, y LangChain para orquestar la lógica.
+# Versión optimizada que permite elegir el modelo LLM al iniciar.
 
 import argparse
 from fastapi import FastAPI
@@ -16,38 +16,25 @@ from langchain.schema.output_parser import StrOutputParser
 # --- 1. Definición de Rutas y Constantes ---
 CHROMA_PATH = "chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-OLLAMA_MODEL = "llama3:8b" # Asegúrate de tener este modelo con 'ollama pull llama3:8b'
 
 # --- 2. Definición del Modelo de Datos para la API ---
-# Pydantic nos ayuda a validar los tipos de datos de entrada.
-# Esperamos recibir un JSON con una clave "query_text".
 class Query(BaseModel):
     query_text: str
 
 # --- 3. Inicialización de la Aplicación FastAPI ---
 app = FastAPI()
 
-# Configuración de CORS (Cross-Origin Resource Sharing)
-# Esto es MUY importante para permitir que tu app de Flutter (que se ejecuta
-# en un "origen" diferente) pueda comunicarse con este servidor.
-origins = [
-    "http://localhost",
-    "http://localhost:8080", # Origen común para apps web locales
-    # Aquí podrías añadir el origen de tu app Flutter cuando la despliegues
-]
-
+# Configuración de CORS
+origins = ["*"] # Permitir todos los orígenes para simplificar las pruebas
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Permite todos los métodos (GET, POST, etc.)
-    allow_headers=["*"], # Permite todas las cabeceras
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- 4. Lógica del Chatbot (El Corazón del Sistema) ---
-
-# Plantilla del Prompt: Esta es la instrucción que le damos al LLM.
-# Le decimos cómo debe comportarse y qué información debe usar.
 PROMPT_TEMPLATE = """
 Responde a la pregunta basándote únicamente en el siguiente contexto:
 
@@ -58,65 +45,69 @@ Responde a la pregunta basándote únicamente en el siguiente contexto:
 Responde a la pregunta basándote en el contexto anterior: {question}
 """
 
-def setup_rag_chain():
-    """
-    Configura y devuelve la cadena RAG (Retrieval-Augmented Generation).
-    Esta función se llamará una vez al iniciar el servidor.
-    """
-    print("Configurando la cadena RAG...")
-    # 1. Cargar la base de datos vectorial que creamos en Colab.
+# Variable global para la cadena RAG
+rag_chain = None
+
+# Usamos un "evento" de FastAPI para configurar la cadena cuando el servidor inicia.
+# Esto es más limpio que hacerlo en el scope global.
+@app.on_event("startup")
+async def startup_event():
+    global rag_chain
+    
+    print("--- Evento de Inicio: Configurando la cadena RAG ---")
+    
+    # 1. Cargar la base de datos vectorial.
     embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
     db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
     print(f"Base de datos cargada. Contiene {db._collection.count()} documentos.")
 
-    # 2. Crear un "retriever" para buscar en la base de datos.
-    # search_kwargs={'k': 3} significa que buscará los 3 trozos más relevantes.
-    retriever = db.as_retriever(search_kwargs={'k': 3})
+    # 2. Crear el retriever.
+    retriever = db.as_retriever(search_kwargs={'k': 5}) # Aumentamos a 5 para más contexto
 
     # 3. Conectar con el modelo LLM local a través de Ollama.
-    model = Ollama(model=OLLAMA_MODEL)
+    # El modelo se define al iniciar el servidor, no está quemado aquí.
+    model = Ollama(model=cli_args.model)
 
-    # 4. Crear el prompt a partir de la plantilla.
+    # 4. Crear el prompt.
     prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
 
-    # 5. Crear la "cadena" o "pipeline" de LangChain.
-    # Esto define el flujo de datos:
-    # - La pregunta del usuario pasa al retriever.
-    # - El retriever busca documentos y los pasa al prompt junto con la pregunta.
-    # - El prompt formateado pasa al modelo.
-    # - La salida del modelo se convierte a texto.
+    # 5. Crear la cadena RAG.
     rag_chain = (
         {"context": retriever, "question": RunnablePassthrough()}
         | prompt
         | model
         | StrOutputParser()
     )
-    print("¡Cadena RAG lista!")
-    return rag_chain
+    print("--- ¡Cadena RAG lista! ---")
 
-# Creamos la cadena una vez al inicio.
-rag_chain = setup_rag_chain()
 
 # --- 5. Definición del Endpoint de la API ---
-# Aquí es donde nuestra app de Flutter hará las peticiones.
 @app.post("/query")
 async def handle_query(query: Query):
-    """
-    Maneja una petición de consulta.
-    Recibe una pregunta, la procesa con la cadena RAG y devuelve la respuesta.
-    """
+    """Maneja una petición de consulta."""
+    if not rag_chain:
+        return {"error": "La cadena RAG no está inicializada."}, 503
+
     print(f"Recibida pregunta: {query.query_text}")
-    # Usamos la cadena RAG para obtener la respuesta.
-    # 'invoke' ejecuta la cadena con la entrada dada.
     response = rag_chain.invoke(query.query_text)
     
     print(f"Respuesta generada: {response}")
     return {"response": response}
 
 # --- 6. Punto de Entrada para Ejecutar el Servidor ---
-# (Opcional, pero útil para ejecutar directamente)
 if __name__ == "__main__":
     import uvicorn
-    # Esto permite ejecutar el servidor con 'python main.py'
+    
+    # Configuración para aceptar argumentos desde la línea de comandos.
+    # Esto nos permite elegir el modelo al arrancar el servidor.
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model", 
+        type=str, 
+        default="phi3:mini", # Usamos phi3:mini por defecto por ser más rápido
+        help="El nombre del modelo de Ollama a utilizar (ej: 'llama3:8b', 'phi3:mini')."
+    )
+    cli_args = parser.parse_args()
+    print(f"--- Iniciando servidor con el modelo: {cli_args.model} ---")
+    
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

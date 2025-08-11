@@ -1,127 +1,131 @@
-# ingest.py
-# Este script se encarga de procesar los datos del MIES (CSVs y PDFs)
-# y los convierte en una base de datos vectorial usando ChromaDB.
+# Script de Ingesta Eficiente por Lotes
 
 import os
 import pandas as pd
-from langchain_community.document_loaders import PyPDFLoader, UnstructuredCSVLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain.docstore.document import Document
+import time
+import shutil
 
 # --- 1. Definición de Rutas y Constantes ---
-# Ruta a la carpeta donde guardaremos la base de datos vectorial.
 CHROMA_PATH = "chroma_db"
-# Ruta a la carpeta donde tenemos nuestros datos (CSVs, PDFs).
 DATA_PATH = "data"
-# Nombre del modelo de embeddings que usaremos. Es multilingüe y potente.
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-def load_documents():
+def process_file(file_path, filename):
     """
-    Carga los documentos desde la carpeta 'data'.
-    Procesa archivos PDF y CSV de manera diferente para formatear el contenido.
+    Procesa un único archivo (PDF o CSV) y devuelve una lista de documentos de LangChain.
     """
-    documents = []
-    # Iteramos sobre cada archivo en la carpeta de datos.
-    for filename in os.listdir(DATA_PATH):
-        file_path = os.path.join(DATA_PATH, filename)
-        
-        # --- Procesamiento para archivos PDF ---
-        if filename.endswith('.pdf'):
-            # Usamos PyPDFLoader para cargar el contenido del PDF.
-            loader = PyPDFLoader(file_path)
-            # 'load' devuelve una lista de documentos, uno por cada página.
-            documents.extend(loader.load())
-            print(f"Cargado {filename} como PDF.")
+    # --- Procesamiento para archivos PDF ---
+    if filename.endswith('.pdf'):
+        print(f"Cargando {filename} como PDF...")
+        loader = PyPDFLoader(file_path)
+        return loader.load()
 
-        # --- Procesamiento para archivos CSV ---
-        elif filename.endswith('.csv'):
-            print(f"Procesando {filename} como CSV...")
+    # --- Procesamiento para archivos CSV ---
+    elif filename.endswith('.csv'):
+        print(f"Procesando {filename} como CSV...")
+        try:
+            # INTENTO 1: Leer con punto y coma como separador
+            df = pd.read_csv(file_path, encoding='latin-1', sep=';', low_memory=False)
+            print(f"Leído exitosamente con separador ';'")
+        except Exception:
             try:
-                # Usamos pandas para leer el CSV.
-                # AÑADIMOS EL PARÁMETRO 'encoding' PARA MANEJAR CARACTERES ESPECIALES.
-                df = pd.read_csv(file_path, encoding='latin-1')
-                
-                # Convertimos cada fila del CSV en un "Documento" de LangChain.
-                # Esto nos permite darle un formato de texto claro a cada fila.
-                for index, row in df.iterrows():
-                    # Creamos el contenido del documento combinando las columnas que nos interesan.
-                    # Usamos .get(col, '') para evitar errores si una columna no existe.
-                    content = f"""
-                    Servicio o Unidad: {row.get('TIPO_BENEFICIO', row.get('NOMBRE_UNIDAD', 'No especificado'))}
-                    Descripción: {row.get('DESCRIPCION_BENEFICIO', 'No especificado')}
-                    Requisitos: {row.get('REQUISITOS_ELEGIBILIDAD', 'No aplica')}
-                    Monto: {row.get('MONTO_ASIGNADO', 'No aplica')}
-                    Provincia: {row.get('PROVINCIA', 'No especificado')}
-                    Cantón: {row.get('CANTON', 'No especificado')}
-                    Dirección: {row.get('DIRECCION', 'No especificado')}
-                    Tipo de Servicio: {row.get('TIPO_SERVICIO', 'No especificado')}
-                    """
-                    # Creamos el objeto Document con el contenido y la fuente (metadata).
-                    doc = Document(
-                        page_content=content.strip(),
-                        metadata={"source": filename, "row": index}
-                    )
-                    documents.append(doc)
-                print(f"Cargadas {len(df)} filas de {filename}.")
+                # INTENTO 2: Leer con coma como separador
+                df = pd.read_csv(file_path, encoding='latin-1', sep=',', low_memory=False)
+                print(f"Leído exitosamente con separador ','")
             except Exception as e:
-                print(f"Error al procesar el archivo {filename}: {e}")
-            
-    return documents
+                print(f"Error definitivo al procesar el archivo {filename}: {e}")
+                return [] # Devuelve lista vacía si falla
+
+        # Formatear cada fila como un documento
+        file_documents = []
+        for index, row in df.iterrows():
+            content = f"""
+            Servicio o Unidad: {row.get('TIPO_BENEFICIO', row.get('NOMBRE_UNIDAD', 'No especificado'))}
+            Descripción: {row.get('DESCRIPCION_BENEFICIO', 'No especificado')}
+            Requisitos: {row.get('REQUISITOS_ELEGIBILIDAD', 'No aplica')}
+            Monto: {row.get('MONTO_ASIGNADO', 'No aplica')}
+            Provincia: {row.get('PROVINCIA', 'No especificado')}
+            Cantón: {row.get('CANTON', 'No especificado')}
+            Dirección: {row.get('DIRECCION', 'No especificado')}
+            Tipo de Servicio: {row.get('TIPO_SERVICIO', 'No especificado')}
+            """
+            doc = Document(
+                page_content=content.strip(),
+                metadata={"source": filename, "row": index}
+            )
+            file_documents.append(doc)
+        print(f"Cargadas {len(df)} filas de {filename}.")
+        return file_documents
+
+    return [] # Devuelve lista vacía si no es PDF o CSV
 
 def split_documents(documents):
-    """
-    Divide los documentos cargados en trozos más pequeños.
-    Esto es crucial para que el modelo de embeddings pueda procesarlos
-    y para que las búsquedas sean más precisas.
-    """
+    """Divide los documentos en trozos."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,      # Tamaño de cada trozo de texto.
-        chunk_overlap=100,   # Cuánto se superponen los trozos entre sí.
+        chunk_size=800,
+        chunk_overlap=100,
         length_function=len,
         add_start_index=True
     )
     chunks = text_splitter.split_documents(documents)
-    print(f"Se han dividido {len(documents)} documentos en {len(chunks)} trozos.")
+    print(f"Documento dividido en {len(chunks)} trozos.")
     return chunks
 
 def main():
-    """
-    Función principal que orquesta todo el proceso de ingesta.
-    """
-    print("Iniciando la ingesta de datos...")
-    
-    # 1. Cargar los documentos de la carpeta 'data'.
-    documents = load_documents()
-    
-    # 2. Dividir los documentos en trozos más manejables.
-    chunks = split_documents(documents)
-    
-    # 3. Crear los embeddings y almacenar en ChromaDB.
-    print("Creando embeddings y guardando en ChromaDB...")
-    
-    # Inicializamos el modelo de embeddings.
-    # La primera vez que se ejecute, descargará el modelo (puede tardar un poco).
+    """Función principal que orquesta el proceso por lotes."""
+    start_time = time.time()
+    print("Iniciando la ingesta de datos EFICIENTE en Colab...")
+
+    # Si la base de datos ya existe, la borramos para empezar de cero.
+    if os.path.exists(CHROMA_PATH):
+        print("Borrando base de datos antigua...")
+        shutil.rmtree(CHROMA_PATH)
+
+    # Inicializamos el modelo de embeddings una sola vez.
     embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
-    
-    # Creamos la base de datos vectorial a partir de los trozos de documentos.
-    # LangChain se encarga de generar los embeddings y guardarlos.
+
+    # Inicializamos una base de datos ChromaDB vacía.
+    # Usamos un documento falso para la creación inicial.
+    dummy_doc = Document(page_content="start")
     vector_store = Chroma.from_documents(
-        documents=chunks, 
+        [dummy_doc],
         embedding=embeddings,
         persist_directory=CHROMA_PATH
     )
-    
-    # Opcional: Persistir la base de datos (aunque from_documents ya lo hace con persist_directory)
-    vector_store.persist()
-    
-    print("¡Proceso completado!")
-    print(f"Se han guardado {len(chunks)} trozos en la base de datos en '{CHROMA_PATH}'.")
 
-# --- Punto de Entrada del Script ---
-# Esto asegura que el código dentro del if solo se ejecute cuando
-# corremos el script directamente (python ingest.py).
-if __name__ == "__main__":
-    main()
+    total_chunks = 0
+    # Iteramos sobre cada archivo en la carpeta de datos.
+    for filename in os.listdir(DATA_PATH):
+        file_path = os.path.join(DATA_PATH, filename)
+
+        # 1. Cargar documentos de UN SOLO archivo.
+        documents = process_file(file_path, filename)
+        if not documents:
+            continue # Pasa al siguiente archivo si no se pudo procesar
+
+        # 2. Dividir los documentos de ESE archivo en trozos.
+        chunks = split_documents(documents)
+
+        # 3. Añadir los trozos a la base de datos existente.
+        if chunks:
+            print(f"Añadiendo {len(chunks)} trozos a ChromaDB...")
+            vector_store.add_documents(chunks, embedding=embeddings)
+            total_chunks += len(chunks)
+
+        print("-" * 40)
+
+    # Persistir todos los cambios al final.
+    vector_store.persist()
+
+    end_time = time.time()
+    print("¡PROCESO EFICIENTE COMPLETADO!")
+    print(f"Se han guardado un total de {total_chunks} trozos en la base de datos en '{CHROMA_PATH}'.")
+    print(f"Tiempo total de ejecución: {((end_time - start_time) / 60):.2f} minutos.")
+
+# --- Ejecutar el proceso ---
+main()
