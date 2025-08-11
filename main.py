@@ -1,53 +1,60 @@
 # main.py
-# Versión final y ultra rápida usando la API de Groq.
+# Versión unificada y final que usa ChromaDB directamente para la búsqueda semántica.
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from langchain_groq import ChatGroq
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema.output_parser import StrOutputParser
+from langchain.schema.runnable import RunnablePassthrough
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_groq import ChatGroq # Importamos el chat de Groq
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
 import os
 from dotenv import load_dotenv
 
-# Cargar las variables de entorno (nuestra clave de API) desde el archivo .env
+# Cargar las variables de entorno (nuestra clave de API de Groq)
 load_dotenv()
 
-# --- 1. Definición de Rutas y Constantes ---
-CHROMA_PATH = "chroma_db"
+# --- 1. Configuración ---
+CHROMA_DB_PATH = "tramites_chroma_db"  # Asegúrate de que esta carpeta exista
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-# Usaremos el modelo Llama 3 de 8B que está disponible en Groq
 GROQ_MODEL = "llama3-8b-8192"
 
-# --- 2. Definición del Modelo de Datos para la API ---
-class Query(BaseModel):
+# --- 2. Modelo de Datos para la API de Chat ---
+class ChatQuery(BaseModel):
     query_text: str
 
 # --- 3. Inicialización de la Aplicación FastAPI ---
-app = FastAPI()
+app = FastAPI(
+    title="Chatbot de Trámites Ecuador (con ChromaDB)",
+    description="Servicio autónomo que responde preguntas usando una base de datos vectorial.",
+    version="3.0.0"
+)
 
-# Configuración de CORS
-origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- 4. Lógica del Chatbot (El Corazón del Sistema) ---
-PROMPT_TEMPLATE = """
-Responde a la pregunta basándote únicamente en el siguiente contexto:
+# --- 4. Lógica del Chatbot ---
 
+# Plantilla del Prompt para la respuesta final
+RESPONSE_PROMPT_TEMPLATE = """
+Eres un asistente virtual amigable y servicial del gobierno de Ecuador. Tu única función es responder preguntas sobre trámites basándote estrictamente en la información que te proporciono a continuación. Responde en español, de forma clara y concisa. Si la información no contiene la respuesta, di amablemente que no encontraste los detalles sobre esa consulta específica.
+
+**Información de Trámites Relevantes que encontré:**
 {context}
 
 ---
 
-Responde a la pregunta basándote en el contexto anterior: {question}
+**Pregunta del Ciudadano:**
+{question}
+
+**Tu Respuesta:**
 """
 
 # Variable global para la cadena RAG
@@ -55,50 +62,61 @@ rag_chain = None
 
 @app.on_event("startup")
 async def startup_event():
+    """Al iniciar el servidor, carga la base de datos y prepara la cadena de RAG."""
     global rag_chain
     
-    print("--- Evento de Inicio: Configurando la cadena RAG con Groq ---")
-    
-    # 1. Cargar la base de datos vectorial local.
-    embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
-    db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-    print(f"Base de datos cargada. Contiene {db._collection.count()} documentos.")
+    print("Cargando la base de datos ChromaDB...")
+    if not os.path.exists(CHROMA_DB_PATH):
+        print(f"Error: La carpeta de la base de datos '{CHROMA_DB_PATH}' no fue encontrada.")
+        print("Por favor, asegúrate de ejecutar primero el script 'ingest_chroma.py'.")
+        return
 
-    # 2. Crear el retriever.
-    retriever = db.as_retriever(search_kwargs={'k': 5})
+    try:
+        embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
+        db = Chroma(persist_directory=CHROMA_DB_PATH, embedding_function=embeddings)
+        
+        # Creamos un "retriever" que buscará los 3 documentos más relevantes
+        retriever = db.as_retriever(search_kwargs={'k': 3})
+        
+        model = ChatGroq(model=GROQ_MODEL)
+        prompt = ChatPromptTemplate.from_template(RESPONSE_PROMPT_TEMPLATE)
+        
+        # Definimos la cadena de RAG (Retrieval-Augmented Generation)
+        rag_chain = (
+            {"context": retriever, "question": RunnablePassthrough()}
+            | prompt
+            | model
+            | StrOutputParser()
+        )
+        print("¡Servicio de Chatbot listo y conectado a ChromaDB!")
+    except Exception as e:
+        print(f"Error fatal al inicializar el servicio: {e}")
+        rag_chain = None
 
-    # 3. Conectar con el modelo LLM en la nube de Groq.
-    # LangChain automáticamente encontrará la API key en el archivo .env
-    model = ChatGroq(model=GROQ_MODEL)
+# --- 5. Definición de los Endpoints ---
 
-    # 4. Crear el prompt.
-    prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+@app.get("/")
+def read_root():
+    return {"message": "Bienvenido al Chatbot de Trámites de Ecuador. Usa /docs para interactuar."}
 
-    # 5. Crear la cadena RAG.
-    rag_chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
-        | prompt
-        | model
-        | StrOutputParser()
-    )
-    print("--- ¡Cadena RAG con Groq lista! ---")
-
-
-# --- 5. Definición del Endpoint de la API ---
-@app.post("/query")
-async def handle_query(query: Query):
-    """Maneja una petición de consulta."""
+@app.post("/chat")
+async def handle_chat(query: ChatQuery):
+    """
+    Maneja una pregunta del usuario, la procesa y devuelve una respuesta conversacional.
+    """
     if not rag_chain:
-        return {"error": "La cadena RAG no está inicializada."}, 503
+        raise HTTPException(status_code=503, detail="El servicio de Chatbot no está inicializado correctamente. Revisa los logs del servidor.")
 
-    print(f"Recibida pregunta: {query.query_text}")
+    print(f"Pregunta recibida: '{query.query_text}'")
+    
+    # Invocamos la cadena RAG directamente con la pregunta del usuario
     response = rag_chain.invoke(query.query_text)
     
-    print(f"Respuesta generada: {response}")
+    print(f"Respuesta generada: '{response}'")
     return {"response": response}
 
 # --- 6. Punto de Entrada para Ejecutar el Servidor ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    # Ejecutamos este único servicio
+    uvicorn.run(app, host="0.0.0.0", port=8001)
