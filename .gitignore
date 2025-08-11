@@ -16,3 +16,6 @@ chatbot_mies/
 # Archivos del editor
 .vscode/
 .idea/
+
+# Base de datos de Chroma
+/tramites_chroma_db
