@@ -1,23 +1,18 @@
-# Python
+# Entorno virtual
+venv/
+.venv/
+
+# Archivos de caché de Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python/
-env/
-venv/
 
-#.env
+chatbot_mies/
+
+# Archivos de entorno
 .env
-*.env
 
-
-# IDE
+# Archivos del editor
 .vscode/
-
-# OS generated files
-.DS_Store
-thumbs.db
-
-# Large CSV files
-data/*.csv
+.idea/
