@@ -29,7 +29,7 @@ class ChatQuery(BaseModel):
 app = FastAPI(
     title="Chatbot de Trámites Ecuador (con ChromaDB)",
     description="Servicio autónomo que responde preguntas usando una base de datos vectorial.",
-    version="3.0.0"
+    version="3.0.1" # Versión optimizada
 )
 
 app.add_middleware(
@@ -75,7 +75,8 @@ async def startup_event():
         embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
         db = Chroma(persist_directory=CHROMA_DB_PATH, embedding_function=embeddings)
         
-        # Creamos un "retriever" que buscará los 3 documentos más relevantes
+        # --- ¡CAMBIO CLAVE! ---
+        # Reducimos el número de documentos a 1 para no exceder el límite de tokens de Groq.
         retriever = db.as_retriever(search_kwargs={'k': 3})
         
         model = ChatGroq(model=GROQ_MODEL)
@@ -118,5 +119,5 @@ async def handle_chat(query: ChatQuery):
 # --- 6. Punto de Entrada para Ejecutar el Servidor ---
 if __name__ == "__main__":
     import uvicorn
-    # Ejecutamos este único servicio
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Recuerda que el puerto final es 8000
+    uvicorn.run(app, host="0.0.0.0", port=8000)
