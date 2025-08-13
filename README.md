@@ -1,59 +1,149 @@
-Chatbot de Trámites del Gobierno de Ecuador
-Este proyecto es un asistente conversacional inteligente diseñado para responder preguntas de los ciudadanos sobre los trámites disponibles en el portal oficial gob.ec. Utiliza técnicas de web scraping para recolectar datos, una base de datos vectorial (ChromaDB) para búsqueda semántica y un Large Language Model (LLM a través de Groq) para generar respuestas en lenguaje natural.
+# Asistente de Trámites del Gobierno de Ecuador
 
-Arquitectura Final
-El proyecto sigue un flujo de tres pasos principales:
+![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-Scraping (Extracción): El script scraper.py navega por el portal gob.ec, extrae la información detallada de cada trámite y la guarda en tramites_extraidos.json.
+Un asistente conversacional inteligente que ayuda a los ciudadanos a encontrar información sobre trámites gubernamentales en Ecuador, utilizando técnicas modernas de procesamiento de lenguaje natural y búsqueda semántica.
 
-Ingesta (Indexación): El script ingest_chroma.py lee el archivo JSON, limpia los datos y los convierte en vectores numéricos que se almacenan en una base de datos local de ChromaDB (tramites_chroma_db/).
+## Características
 
-Servicio (API Conversacional): El script main.py levanta un servidor FastAPI que expone un endpoint /chat. Este servicio utiliza la base de datos ChromaDB para encontrar los trámites más relevantes a la pregunta de un usuario y luego usa la API de Groq para generar una respuesta coherente y amable.
+- Búsqueda semántica de trámites gubernamentales
+- Extracción automática de datos del portal gob.ec
+- Interfaz de chat intuitiva
+- Respuestas precisas basadas en información oficial
+- Arquitectura escalable y modular
 
-2. Actualiza tu requirements.txt
-Asegúrate de que tu archivo requirements.txt contenga únicamente las librerías que la versión final del proyecto necesita.
+## Arquitectura
 
-# requirements.txt
+El proyecto sigue una arquitectura de tres capas principales:
 
-# Para el Web Scraper
-requests
-beautifulsoup4
+1. **Capa de Extracción de Datos**
+   - Web Scraping del portal gob.ec
+   - Procesamiento y limpieza de datos
+   - Almacenamiento estructurado en JSON
 
-# Para la Ingesta y el Servidor del Chatbot
-langchain
-langchain-community
-langchain-groq
-sentence-transformers
-chromadb
-fastapi
-uvicorn[standard]
-python-dotenv
+2. **Capa de Procesamiento**
+   - Vectorización de documentos con Sentence Transformers
+   - Almacenamiento en base de datos vectorial (ChromaDB)
+   - Búsqueda semántica
 
-Puedes instalar todas estas dependencias con:
+3. **Capa de Servicio**
+   - API REST con FastAPI
+   - Integración con modelo de lenguaje (Groq)
+   - Generación de respuestas naturales
 
-pip install -r requirements.txt
+## Requisitos Previos
 
-3. Cómo Ejecutar el Proyecto Completo
-Sigue estos pasos en orden:
+- Python 3.8 o superior
+- pip (gestor de paquetes de Python)
+- Clave de API de Groq
+- Conexión a internet para la descarga de modelos
 
-Paso A: Extraer los Datos (Solo si necesitas actualizarlos)
-Este paso solo es necesario si quieres obtener la información más reciente de gob.ec.
+## Instalación
 
-python scraper.py
+1. Clona el repositorio:
+   ```bash
+   git clone [URL_DEL_REPOSITORIO]
+   cd asistente_tramites_EC
+   ```
 
-Esto generará (o actualizará) el archivo tramites_extraidos.json.
+2. Crea y activa un entorno virtual (recomendado):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # En Windows: venv\Scripts\activate
+   ```
 
-Paso B: Crear la Base de Datos Vectorial (Solo si los datos cambiaron)
-Ejecuta este paso solo después de haber corrido el scraper.
+3. Instala las dependencias:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-python ingest_chroma.py
+4. Crea un archivo `.env` en la raíz del proyecto con tu clave de Groq:
+   ```
+   GROQ_API_KEY=tu_clave_aquí
+   ```
 
-Esto creará (o actualizará) la carpeta tramites_chroma_db/.
+## Uso
 
-Paso C: Iniciar el Servidor del Chatbot
-Este es el paso principal para usar la aplicación.
-Asegúrate de tener tu clave de Groq en un archivo .env.
+### 1. Extracción de Datos (Opcional)
 
+Para actualizar la base de datos de trámites:
+
+```bash
+python scraper_robusto.py  # Versión principal del scraper
+# o
+python scraper_lista.py    # Versión alternativa
+```
+
+### 2. Procesamiento e Indexación
+
+Procesa los datos y crea la base de datos vectorial:
+
+```bash
+python ingest_chroma.py    # Versión estándar
+# o
+python ingest_dinamico.py  # Versión con procesamiento dinámico
+```
+
+### 3. Iniciar el Servidor
+
+Inicia el servidor de la API:
+
+```bash
 uvicorn main:app --reload --port 8000
+```
 
-¡Y listo! Tu chatbot estará disponible y listo para responder preguntas en http://127.0.0.1:8000.
+### 4. Acceder a la Aplicación
+
+Abre tu navegador y visita:
+```
+http://127.0.0.1:8000
+```
+
+O utiliza la API directamente:
+```bash
+curl -X POST "http://127.0.0.1:8000/chat" \
+     -H "Content-Type: application/json" \
+     -d '{"question": "¿Cómo obtengo mi pasaporte?"}'
+```
+
+## Estructura del Proyecto
+
+```
+asistente_tramites_EC/
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── .env.example
+├── main.py                 # Servidor FastAPI principal
+├── scraper_robusto.py      # Script principal de web scraping
+├── scraper_lista.py        # Versión alternativa de scraping
+├── scraper_duplicado_cedula.py  # Utilidad para manejo de cédulas
+├── ingest_chroma.py        # Script de ingesta a ChromaDB
+├── ingest_dinamico.py      # Versión dinámica de ingesta
+├── list_search.py          # Utilidades de búsqueda
+├── tramites_chroma_db/     # Base de datos vectorial
+├── tramites_extraidos_*.json  # Datos extraídos
+└── urls_encontradas.json   # URLs recolectadas
+```
+
+## Tecnologías Utilizadas
+
+- **Lenguaje**: Python 3.8+
+- **Web Scraping**: BeautifulSoup4, Requests
+- **Procesamiento de Lenguaje**: LangChain, Sentence Transformers
+- **Base de Datos Vectorial**: ChromaDB
+- **API Web**: FastAPI, Uvicorn
+- **Modelo de Lenguaje**: Groq (LLM)
+
+## Licencia
+
+Este proyecto está bajo la Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
+
+## Contribuciones
+
+Las contribuciones son bienvenidas. Por favor, lee nuestras pautas de contribución antes de enviar un pull request.
+
+## Contacto
+
+¿Preguntas o sugerencias? ¡No dudes en abrir un issue!
